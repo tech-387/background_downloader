@@ -138,6 +138,25 @@ class UIDTJobService : JobService() {
             return params.extras.getString(key)
         }
 
+        /**
+         * What the system does with the job's notification when the job ends.
+         *
+         * When the task shows a notification after it ended (complete, error, paused or
+         * canceled), the notification is detached and the plugin updates or removes it
+         * afterwards. Otherwise the system removes it together with the job: removing it
+         * from the app after [JobService.jobFinished] does not happen when the process is
+         * killed right after, which Android does within milliseconds for an app the user
+         * swiped away from Recents, and the running notification then stays forever.
+         */
+        private val jobEndNotificationPolicy: Int
+            get() {
+                val config = notificationConfig
+                val showsNotificationAfterEnd = config != null && (config.complete != null ||
+                        config.error != null || config.paused != null || config.canceled != null)
+                return if (showsNotificationAfterEnd) JobService.JOB_END_NOTIFICATION_POLICY_DETACH
+                else JobService.JOB_END_NOTIFICATION_POLICY_REMOVE
+            }
+
         override suspend fun setForegroundNotification(
             notificationId: Int,
             notification: Notification,
@@ -148,7 +167,7 @@ class UIDTJobService : JobService() {
                     params,
                     notificationId,
                     notification,
-                    JobService.JOB_END_NOTIFICATION_POLICY_DETACH
+                    jobEndNotificationPolicy
                 )
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 service.startForeground(notificationId, notification, notificationType)
