@@ -210,6 +210,10 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                     val jobInfoBuilder = JobInfo.Builder(task.taskId.hashCode(), componentName)
                         .setRequiresCharging(false)
                         .setExtras(extras)
+                        // A job that lost its network is run again once the network is back
+                        // (see UIDTJobService.onStopJob), but not before this backoff. 10
+                        // seconds is the shortest, the default is 30
+                        .setBackoffCriteria(10_000L, JobInfo.BACKOFF_POLICY_LINEAR)
 
                     if (taskRequiresWifi) {
                         if (Build.VERSION.SDK_INT >= 28) {

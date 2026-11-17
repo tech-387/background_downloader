@@ -74,13 +74,20 @@ class UIDTJobService : JobService() {
     }
 
     override fun onStopJob(params: JobParameters?): Boolean {
-        Log.i(TaskRunner.TAG, "Stopping UIDT JobService")
-        if (params != null) {
-            jobContexts[params.jobId]?.isStopped = true
-            jobs.remove(params.jobId)?.cancel()
-            jobContexts.remove(params.jobId)
+        if (params == null) return false
+        // The job lost its network: the system runs it again once the network is back, with the
+        // same task, also when no Flutter engine runs to retry it. Other stops are not
+        // rescheduled; background_downloader manages retries internally
+        val lostNetwork = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                params.stopReason == JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY
+        Log.i(TaskRunner.TAG, "Stopping UIDT JobService${if (lostNetwork) ", lost its network" else ""}")
+        jobContexts[params.jobId]?.let {
+            it.lostNetwork = lostNetwork
+            it.isStopped = true
         }
-        return false // Do not reschedule automatically; background_downloader manages retries internally
+        jobs.remove(params.jobId)?.cancel()
+        jobContexts.remove(params.jobId)
+        return lostNetwork
     }
 
     /**
@@ -102,6 +109,16 @@ class UIDTJobService : JobService() {
 
         @Volatile
         var isStopped: Boolean = false
+
+        /** Set before [isStopped] when the system stopped the job because it lost its network */
+        @Volatile
+        var lostNetwork: Boolean = false
+
+        override val reschedulesOnNetworkLoss: Boolean
+            get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+        override val waitsForNetwork: Boolean
+            get() = lostNetwork
 
         override val appContext: Context
             get() = service.applicationContext

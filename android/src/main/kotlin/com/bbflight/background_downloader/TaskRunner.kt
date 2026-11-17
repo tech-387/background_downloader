@@ -61,6 +61,20 @@ interface TaskJobContext {
     val isTaskStopped: Boolean
     val runId: String? // the WorkManager request id, or null where runs can't be told apart
 
+    /**
+     * True when the system can run this job again by itself once the network is back
+     * (a UIDT job returns true from onStopJob), also when no Flutter engine runs
+     */
+    val reschedulesOnNetworkLoss: Boolean
+        get() = false
+
+    /**
+     * True when the system stopped this job because it lost its network, and will run it
+     * again once the network is back, see [reschedulesOnNetworkLoss]
+     */
+    val waitsForNetwork: Boolean
+        get() = false
+
     // Foreground control
     var runInForeground: Boolean
     val isActive: Boolean // maps to !isStopped or Service state
@@ -286,12 +300,15 @@ open class TaskRunner(
                 if (modifiedStatus.isFinalState()) {
                     // Store final status locally before removing task from keyTasksMap so that if
                     // the process dies before Dart persists the update, resumeFromBackground will
-                    // replay it instead of rescheduleKilledTasks re-enqueuing a finished task
+                    // replay it instead of rescheduleKilledTasks re-enqueuing a finished task.
+                    // Committed synchronously: Android kills a process whose task the user removed
+                    // from Recents right after its job finishes, before an apply() reaches disk
                     storeLocally(
                         BDPlugin.keyStatusUpdateMap,
                         task.taskId,
                         statusUpdateJson,
-                        prefs
+                        prefs,
+                        commit = true
                     )
                 }
                 val arg = taskStatusUpdate.argList
@@ -345,7 +362,8 @@ open class TaskRunner(
                 BDPlugin.prefsLock.write {
                     val tasksMap = getTaskMap(prefs)
                     tasksMap.remove(task.taskId)
-                    prefs.edit {
+                    // committed for the same reason as the final status above
+                    prefs.edit(commit = true) {
                         putString(
                             BDPlugin.keyTasksMap,
                             bdJson.encodeToString<MutableMap<String, Task>>(tasksMap)
@@ -448,14 +466,15 @@ open class TaskRunner(
             prefsKey: String,
             taskId: String,
             item: String,
-            prefs: SharedPreferences
+            prefs: SharedPreferences,
+            commit: Boolean = false
         ) {
             BDPlugin.prefsLock.write {
                 // add the data to a map keyed by taskId
                 val jsonString = prefs.getString(prefsKey, "{}") as String
                 val mapByTaskId = bdJson.decodeFromString<MutableMap<String, String>>(jsonString)
                 mapByTaskId[taskId] = item
-                prefs.edit {
+                prefs.edit(commit = commit) {
                     putString(
                         prefsKey, bdJson.encodeToString<MutableMap<String, String>>(mapByTaskId)
                     )
@@ -619,6 +638,16 @@ open class TaskRunner(
             } finally {
                 timeoutJob.cancel()
                 withContext(NonCancellable) {
+                    if (status == TaskStatus.failed && waitsForNetworkAfterFailure()) {
+                        // the system runs the job again once the network is back, see
+                        // [TaskJobContext.waitsForNetwork]: not a failure, no retry is used up
+                        Log.i(
+                            TAG,
+                            "Task ${task.taskId} lost its network, it runs again when the network is back"
+                        )
+                        status = TaskStatus.enqueued
+                        taskException = null
+                    }
                     // NonCancellable to make sure we clean up even if job is being cancelled
                     // a pause request that was not acted upon must not affect a later run
                     BDPlugin.pausedTaskIds.remove(task.taskId)
@@ -669,6 +698,28 @@ open class TaskRunner(
             }
         }
         hasDeliveredResult = true
+    }
+
+    /**
+     * Returns true when this run failed because its job lost its network, and the system
+     * runs the job again once the network is back (see [TaskJobContext.waitsForNetwork])
+     *
+     * A lost network can break the connection a moment before the system stops the job for
+     * it, so after a connection error this waits up to 2 seconds for that stop
+     */
+    private fun waitsForNetworkAfterFailure(): Boolean {
+        if (!context.reschedulesOnNetworkLoss || BDPlugin.canceledTaskIds.contains(task.taskId)) {
+            return false
+        }
+        val isConnectionError = taskException?.type == ExceptionType.connection ||
+                taskException?.type == ExceptionType.fileSystem
+        if (!context.isTaskStopped && isConnectionError) {
+            for (i in 0 until 20) {
+                if (context.isTaskStopped) break
+                Thread.sleep(100)
+            }
+        }
+        return context.isTaskStopped && context.waitsForNetwork
     }
 
     /**
