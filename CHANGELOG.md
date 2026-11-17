@@ -1,3 +1,7 @@
+## 9.6.6+tech387.1 (fork)
+
+* Android: a task whose `metaData` is a JSON object with a string `notificationLargeIcon` (absolute path of an image file) shows that image, center-cropped to a square, as the large icon of its notifications. See `NotificationLargeIcon.kt`. Other `metaData` is unaffected.
+
 ## 9.6.6
 
 * Bug fixes

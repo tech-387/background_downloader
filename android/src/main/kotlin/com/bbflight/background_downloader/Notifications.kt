@@ -548,6 +548,8 @@ object NotificationService {
         ).setPriority(NotificationCompat.PRIORITY_LOW).setSmallIcon(iconDrawable)
             .setShowWhen(notificationType != NotificationType.running)
             .setSilent(appIsInForeground())
+        // Fork addition: an image named in the task's metaData, see NotificationLargeIcon
+        NotificationLargeIcon.forTask(taskWorker.task)?.let { builder.setLargeIcon(it) }
         if (notificationType == NotificationType.running) {
             // Keep concurrent download notifications in a stable order
             builder.setWhen(taskWorker.task.creationTime)
